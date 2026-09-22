@@ -1,0 +1,12 @@
+{
+  "name": "zuna",
+  "version": "1.0.0",
+  "description": "ZUNA TAILORS - Modern Bespoke Tailoring Web Application",
+  "private": true,
+  "scripts": {
+    "server": "node server/index.js",
+    "client": "cd client && node ./node_modules/vite/bin/vite.js --host 0.0.0.0 --port 3000",
+    "build": "cd client && node ./node_modules/vite/bin/vite.js build",
+    "start": "node server/index.js"
+  }
+}

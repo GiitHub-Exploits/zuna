@@ -1,0 +1,20 @@
+{
+  "name": "zuna-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "cloudinary": "^2.11.0",
+    "cors": "^2.8.5",
+    "dotenv": "^18.0.2",
+    "express": "^4.21.2",
+    "mongoose": "^9.10.1",
+    "multer": "^1.4.5-lts.1",
+    "web-push": "^3.6.7"
+  }
+}
