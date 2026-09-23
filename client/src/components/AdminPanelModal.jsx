@@ -96,7 +96,7 @@ export default function AdminPanelModal({ isOpen, onClose, onLogout, onWorkUpdat
   const handleUpdateStatus = async (orderId, newStatus) => {
     setStatusUpdatingId(orderId);
     try {
-      const res = await fetch(`/api/orders/${orderId}`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
@@ -116,7 +116,7 @@ export default function AdminPanelModal({ isOpen, onClose, onLogout, onWorkUpdat
   const handleDeleteOrder = async (orderId) => {
     if (!confirm(`Delete order ${orderId} permanently from MongoDB?`)) return;
     try {
-      const res = await fetch(`/api/orders/${orderId}`, { method: 'DELETE' });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}`, { method: 'DELETE' });
       if (res.ok) {
         setOrders(prev => prev.filter(o => o.id !== orderId));
       }
@@ -173,7 +173,7 @@ export default function AdminPanelModal({ isOpen, onClose, onLogout, onWorkUpdat
   const handleDeleteWork = async (id) => {
     if (!confirm('Are you sure you want to remove this piece from the portfolio?')) return;
     try {
-      const res = await fetch(`/api/work/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/work/${id}`, { method: 'DELETE' });
       if (res.ok) {
         setWorkItems(prev => prev.filter(w => w.id !== id));
         if (onWorkUpdated) onWorkUpdated();

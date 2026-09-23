@@ -224,7 +224,7 @@ export default function AdminSection({
   const handleUpdateStatus = async (orderId, newStatus) => {
     setStatusUpdatingId(orderId);
     try {
-      const res = await fetch(`/api/orders/${orderId}`, {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
@@ -245,7 +245,7 @@ export default function AdminSection({
   const handleDeleteOrder = async (orderId) => {
     if (!confirm(`Delete order ${orderId} permanently from MongoDB? This action cannot be undone.`)) return;
     try {
-      const res = await fetch(`/api/orders/${orderId}`, { method: 'DELETE' });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/orders/${orderId}`, { method: 'DELETE' });
       if (res.ok) {
         setOrders(prev => prev.filter(o => o.id !== orderId));
       } else {
@@ -398,7 +398,7 @@ export default function AdminSection({
   const handleDeleteWork = async (id, title) => {
     if (!confirm(`Are you sure you want to permanently remove "${title || 'this piece'}" from the portfolio in MongoDB?`)) return;
     try {
-      const res = await fetch(`/api/work/${id}`, { method: 'DELETE' });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/work/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (res.ok && data.success) {
         setWorkItems(prev => prev.filter(w => w.id !== id));
