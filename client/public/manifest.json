@@ -1,0 +1,17 @@
+{
+  "short_name": "ZUNA",
+  "name": "ZUNA TAILORS — Bespoke Atelier",
+  "description": "Bespoke tailoring, suiting, shirting, and alterations by Master Sultan Baig in Howrah.",
+  "icons": [
+    {
+      "src": "/logo.jpg",
+      "type": "image/jpeg",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#faf9f5",
+  "theme_color": "#161514",
+  "display": "standalone",
+  "orientation": "portrait"
+}

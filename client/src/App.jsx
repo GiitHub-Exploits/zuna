@@ -5,7 +5,10 @@ import HomeTab from './components/HomeTab';
 import OrderTab from './components/OrderTab';
 import WorkTab from './components/WorkTab';
 import AdminSection from './components/AdminSection';
+import AIAssistantWidget from './components/AIAssistantWidget';
 import { CONTACT_INFO } from './data/constants';
+import { getOrCreateUserId } from './utils/user';
+import { registerServiceWorker, subscribeUserToPush } from './utils/push';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState('home');
@@ -33,6 +36,40 @@ export default function App() {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
+  // Handle URL deep-links and Initialize Web Push Notification on visit
+  useEffect(() => {
+    // 1. Deep link from push notifications
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab');
+    if (tabParam && ['home', 'order', 'work', 'admin'].includes(tabParam)) {
+      setCurrentTab(tabParam);
+    }
+
+    // 2. Register Service Worker and ask notification permission on first visit
+    const initPush = async () => {
+      const userId = getOrCreateUserId();
+      await registerServiceWorker();
+
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        if (Notification.permission === 'default') {
+          // Gracefully prompt user for notifications after brief page settling
+          setTimeout(async () => {
+            try {
+              await subscribeUserToPush(userId, isAdmin);
+            } catch (e) {
+              console.warn('Push subscription prompt deferred:', e);
+            }
+          }, 2000);
+        } else if (Notification.permission === 'granted') {
+          // Resync current device subscription with server
+          subscribeUserToPush(userId, isAdmin);
+        }
+      }
+    };
+
+    initPush();
+  }, [isAdmin]);
+
   const toggleTheme = () => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
@@ -45,12 +82,16 @@ export default function App() {
 
   const handleAdminLoginSuccess = () => {
     setIsAdmin(true);
+    const userId = getOrCreateUserId();
+    subscribeUserToPush(userId, true);
   };
 
   const handleAdminLogout = () => {
     localStorage.removeItem("zuna_admin_auth");
     localStorage.removeItem("adminpass");
     setIsAdmin(false);
+    const userId = getOrCreateUserId();
+    subscribeUserToPush(userId, false);
   };
 
   // Cross-tab triggers from service cards
@@ -166,6 +207,9 @@ export default function App() {
           window.scrollTo({ top: 0, behavior: 'smooth' });
         }}
       />
+
+      {/* 5. Floating, Swipeable & Draggable AI Assistant Icon & Mini Window */}
+      <AIAssistantWidget />
     </div>
   );
 }

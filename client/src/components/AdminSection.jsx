@@ -27,7 +27,8 @@ import {
   MapPin, 
   Image as ImageIcon,
   CloudUpload,
-  CheckCircle
+  CheckCircle,
+  Bell
 } from 'lucide-react';
 import { CONTACT_INFO } from '../data/constants';
 
@@ -108,7 +109,7 @@ export default function AdminSection({
 
     setIsVerifying(true);
     try {
-      const res = await fetch('/api/admin/login', {
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/admin/login", {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: passwordInput.trim() })
@@ -141,7 +142,7 @@ export default function AdminSection({
   // Fetch Server Health
   const checkHealth = async () => {
     try {
-      const res = await fetch('/api/health');
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/health");
       const data = await res.json();
       setServerHealth(data);
     } catch (e) {
@@ -153,7 +154,7 @@ export default function AdminSection({
   const fetchOrders = async () => {
     setLoadingOrders(true);
     try {
-      const res = await fetch('/api/orders');
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/orders");
       const data = await res.json();
       setOrders(data.orders || []);
     } catch (err) {
@@ -167,7 +168,7 @@ export default function AdminSection({
   const fetchWork = async () => {
     setLoadingWork(true);
     try {
-      const res = await fetch('/api/work');
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/work");
       const data = await res.json();
       setWorkItems(data.items || []);
     } catch (err) {
@@ -177,13 +178,47 @@ export default function AdminSection({
     }
   };
 
+  const [isSendingTestPush, setIsSendingTestPush] = useState(false);
+
   useEffect(() => {
     if (isAdmin) {
       checkHealth();
       fetchOrders();
       fetchWork();
+
+      // Deep link to specific order from push notification click (?tab=admin&orderId=...)
+      const params = new URLSearchParams(window.location.search);
+      const targetOrderId = params.get('orderId');
+      if (targetOrderId) {
+        setSearchQuery(targetOrderId);
+      }
     }
   }, [isAdmin]);
+
+  const handleSendTestPush = async () => {
+    setIsSendingTestPush(true);
+    try {
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/push/test", {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          isAdmin: true,
+          title: 'ZUNA TAILORS — Live Admin Alert',
+          body: 'Web push is active! You will receive instant notifications for every newly placed order.'
+        })
+      });
+      const data = await res.json();
+      if (data.sentCount > 0) {
+        alert('Test notification dispatched! Check your phone notification bar.');
+      } else {
+        alert('Push notification requested. Please ensure notification permissions are allowed on this device.');
+      }
+    } catch (e) {
+      alert('Error sending test push: ' + e.message);
+    } finally {
+      setIsSendingTestPush(false);
+    }
+  };
 
   // Update order status in MongoDB
   const handleUpdateStatus = async (orderId, newStatus) => {
@@ -251,7 +286,7 @@ export default function AdminSection({
       const formData = new FormData();
       formData.append('image', selectedImageFile);
 
-      const res = await fetch('/api/upload', {
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/upload", {
         method: 'POST',
         body: formData
       });
@@ -297,7 +332,7 @@ export default function AdminSection({
         formData.append('details', newWork.details);
         formData.append('aspectRatio', newWork.aspectRatio);
 
-        const res = await fetch('/api/work', {
+        const res = await fetch(import.meta.env.VITE_API_URL + "/api/work", {
           method: 'POST',
           body: formData
         });
@@ -321,7 +356,7 @@ export default function AdminSection({
       }
 
       // If we already have a URL (either from Cloudinary upload or pasted URL)
-      const res = await fetch('/api/work', {
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/work", {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -528,6 +563,17 @@ export default function AdminSection({
             <CloudUpload className="w-3.5 h-3.5" />
             <span>{serverHealth?.cloudinaryConfigured ? 'Cloudinary Ready' : 'Cloudinary via .env'}</span>
           </div>
+
+          {/* Web Push Notification Test Button */}
+          <button
+            onClick={handleSendTestPush}
+            disabled={isSendingTestPush}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#9e7938]/10 hover:bg-[#9e7938]/20 text-[#9e7938] border border-[#9e7938]/30 text-xs font-semibold transition-all cursor-pointer shadow-xs disabled:opacity-50"
+            title="Send live test notification to verify your device receives push alerts"
+          >
+            <Bell className="w-3.5 h-3.5" />
+            <span>{isSendingTestPush ? 'Sending...' : 'Test Push'}</span>
+          </button>
 
           {/* Logout button */}
           <button

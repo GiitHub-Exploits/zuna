@@ -7,6 +7,8 @@ import multer from 'multer';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import { v2 as cloudinary } from 'cloudinary';
+import webpush from 'web-push';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
@@ -17,6 +19,33 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || '';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'zustang';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+
+app.use(cors({
+  origin: [
+    'https://zunatailors.vercel.app',
+    'http://localhost:3000'
+  ],
+  credentials: true
+}));
+
+// =========================================================================
+// ATELIER KNOWLEDGE BASE & DOCUMENTATION
+// (Empty variable as requested — user will fill this up with custom docs)
+// =========================================================================
+export const ATELIER_DOCS = ``;
+
+// Web Push VAPID Configuration
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@zunatailors.com';
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  console.log('✅ Web Push VAPID initialized successfully!');
+} else {
+  console.log('ℹ️  Web Push VAPID keys not detected in server/.env');
+}
 
 // Cloudinary Configuration
 const isCloudinaryConfigured = Boolean(
@@ -69,9 +98,27 @@ const upload = multer({
   },
 });
 
+// Rate Limiters (DDoS, abuse & token protection)
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 400, // max 400 requests per 15 minutes per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests from this IP, please try again in 15 minutes.' }
+});
+
+const aiChatLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 20, // max 20 AI queries per minute per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'AI query limit reached for this minute. Please wait a moment before sending another message.' }
+});
+
 // Middleware
-app.use(cors());
+
 app.use(express.json());
+app.use('/api', generalLimiter);
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // -------------------------------------------------------------
@@ -113,6 +160,142 @@ const WorkSchema = new mongoose.Schema({
 
 const OrderModel = mongoose.model('Order', OrderSchema);
 const WorkModel = mongoose.model('Work', WorkSchema);
+
+// Push Subscription Schema & Model
+const SubscriptionSchema = new mongoose.Schema({
+  userId: { type: String, required: true, index: true },
+  isAdmin: { type: Boolean, default: false, index: true },
+  subscription: {
+    endpoint: { type: String, required: true, unique: true },
+    expirationTime: { type: Number, default: null },
+    keys: {
+      p256dh: { type: String, required: true },
+      auth: { type: String, required: true }
+    }
+  },
+  userAgent: { type: String, default: '' },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const SubscriptionModel = mongoose.model('Subscription', SubscriptionSchema);
+
+// Helper: Send single push with auto-cleanup of dead endpoints
+const sendPush = async (subscriptionDoc, payload) => {
+  try {
+    await webpush.sendNotification(
+      subscriptionDoc.subscription,
+      JSON.stringify(payload)
+    );
+    return true;
+  } catch (err) {
+    console.warn(`[PUSH FAILED] ${subscriptionDoc.subscription.endpoint}:`, err.statusCode || err.message);
+    if (err.statusCode === 404 || err.statusCode === 410) {
+      try {
+        await SubscriptionModel.deleteOne({ _id: subscriptionDoc._id });
+        console.log(`[PUSH CLEANUP] Deleted expired subscription ${subscriptionDoc._id}`);
+      } catch (e) {}
+    }
+    return false;
+  }
+};
+
+// Helper: Notify Admin when a new bespoke order is placed
+const notifyAdminNewOrder = async (order) => {
+  try {
+    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+    const adminSubs = await SubscriptionModel.find({ isAdmin: true });
+    if (!adminSubs || adminSubs.length === 0) {
+      console.log('[PUSH] No active admin push subscriptions registered in database.');
+      return;
+    }
+
+    const payload = {
+      title: 'New Order Received',
+      body: `A new order has been placed by ${order.customerName}. Tap to view order details.`,
+      icon: '/logo.jpg',
+      badge: '/logo.jpg',
+      data: {
+        url: `/?tab=admin&orderId=${order.id}`,
+        orderId: order.id,
+        type: 'new_order'
+      }
+    };
+
+    console.log(`[PUSH ADMIN] Dispatching new order notification for ${order.id} to ${adminSubs.length} admin device(s)...`);
+    for (const sub of adminSubs) {
+      sendPush(sub, payload);
+    }
+  } catch (err) {
+    console.error('[PUSH ADMIN ERROR]', err);
+  }
+};
+
+// Helper: Notify Customer when their order status changes
+const notifyCustomerOrderStatus = async (order, newStatus) => {
+  try {
+    if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return;
+    if (!order.userId || order.userId.trim() === '') return;
+
+    const customerSubs = await SubscriptionModel.find({ userId: order.userId.trim() });
+    if (!customerSubs || customerSubs.length === 0) {
+      console.log(`[PUSH CUSTOMER] No active push subscriptions found for customer userId: ${order.userId}`);
+      return;
+    }
+
+    let title = 'Order Update';
+    let body = `Your order ${order.id} status was updated to ${newStatus}.`;
+
+    switch (newStatus) {
+      case 'CONFIRMED':
+        title = 'Order Confirmed';
+        body = `Your order ${order.id} (${order.clothCategory}) has been confirmed by Master Sultan Baig.`;
+        break;
+      case 'MEASURING':
+        title = 'Preparing Your Order';
+        body = `Your measurement & fitting appointment for order ${order.id} is confirmed.`;
+        break;
+      case 'CRAFTING':
+        title = 'Preparing Your Order';
+        body = `Master Sultan Baig is tailoring your bespoke garment (Order ${order.id}).`;
+        break;
+      case 'READY':
+        title = 'Out for Delivery';
+        body = `Your order ${order.id} is ready for trial fitting or pickup!`;
+        break;
+      case 'DELIVERED':
+        title = 'Delivered';
+        body = `Your bespoke order ${order.id} has been delivered. Thank you for choosing ZUNA Tailors!`;
+        break;
+      case 'CANCELLED':
+        title = 'Order Cancelled';
+        body = `Your order ${order.id} has been cancelled.`;
+        break;
+      default:
+        title = `Order Status: ${newStatus}`;
+        body = `Your order ${order.id} status is now ${newStatus}.`;
+    }
+
+    const payload = {
+      title,
+      body,
+      icon: '/logo.jpg',
+      badge: '/logo.jpg',
+      data: {
+        url: `/?tab=order&orderId=${order.id}`,
+        orderId: order.id,
+        status: newStatus,
+        type: 'status_update'
+      }
+    };
+
+    console.log(`[PUSH CUSTOMER] Dispatching status '${newStatus}' notification to customer ${order.userId}...`);
+    for (const sub of customerSubs) {
+      sendPush(sub, payload);
+    }
+  } catch (err) {
+    console.error('[PUSH CUSTOMER ERROR]', err);
+  }
+};
 
 const connectMongoDB = async () => {
   if (!MONGODB_URI || MONGODB_URI.trim() === '') {
@@ -483,6 +666,9 @@ app.post('/api/orders', async (req, res) => {
     const savedOrder = await OrderModel.create(newOrder);
     console.log(`[MONGODB ORDER SAVED] ${savedOrder.id} for ${savedOrder.customerName} (User: ${savedOrder.userId || 'guest'})`);
 
+    // Dispatch Web Push Notification to Admin
+    notifyAdminNewOrder(savedOrder);
+
     res.status(201).json({
       success: true,
       message: 'Order saved to MongoDB successfully',
@@ -518,6 +704,11 @@ app.patch('/api/orders/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Order not found in MongoDB' });
     }
 
+    // Dispatch Web Push Notification to Customer if status changed
+    if (status) {
+      notifyCustomerOrderStatus(updated, status);
+    }
+
     res.json({ success: true, order: updated });
   } catch (err) {
     console.error('Error updating order in MongoDB:', err);
@@ -538,6 +729,184 @@ app.delete('/api/orders/:id', async (req, res) => {
   } catch (err) {
     console.error('Error deleting order from MongoDB:', err);
     res.status(500).json({ success: false, message: 'Failed to delete order' });
+  }
+});
+
+// -------------------------------------------------------------
+// Web Push Subscription Endpoints
+// -------------------------------------------------------------
+
+// GET /api/push/vapid-public-key - Get public VAPID key for frontend subscription
+app.get('/api/push/vapid-public-key', (req, res) => {
+  if (!VAPID_PUBLIC_KEY) {
+    return res.status(503).json({ success: false, message: 'VAPID keys not configured in server' });
+  }
+  res.json({ success: true, publicKey: VAPID_PUBLIC_KEY });
+});
+
+// POST /api/push/subscribe - Store or update user push subscription in MongoDB
+app.post('/api/push/subscribe', async (req, res) => {
+  if (!isMongoConnected) {
+    return res.status(503).json({ success: false, message: 'MongoDB not connected' });
+  }
+
+  try {
+    const { subscription, userId, isAdmin, userAgent } = req.body;
+    if (!subscription || !subscription.endpoint || !subscription.keys) {
+      return res.status(400).json({ success: false, message: 'Invalid push subscription payload' });
+    }
+
+    const updated = await SubscriptionModel.findOneAndUpdate(
+      { 'subscription.endpoint': subscription.endpoint },
+      {
+        userId: (userId || 'anonymous').trim(),
+        isAdmin: Boolean(isAdmin),
+        subscription,
+        userAgent: userAgent || '',
+        updatedAt: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    console.log(`[PUSH SUBSCRIPTION SAVED] For User: ${updated.userId} (Admin: ${updated.isAdmin})`);
+    res.json({ success: true, message: 'Subscription saved to database', id: updated._id });
+  } catch (err) {
+    console.error('Error saving push subscription:', err);
+    res.status(500).json({ success: false, message: 'Server error saving subscription: ' + err.message });
+  }
+});
+
+// POST /api/push/unsubscribe - Remove subscription
+app.post('/api/push/unsubscribe', async (req, res) => {
+  if (!isMongoConnected) {
+    return res.status(503).json({ success: false, message: 'MongoDB not connected' });
+  }
+
+  try {
+    const { endpoint } = req.body;
+    if (endpoint) {
+      await SubscriptionModel.deleteOne({ 'subscription.endpoint': endpoint });
+    }
+    res.json({ success: true, message: 'Unsubscribed successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to unsubscribe' });
+  }
+});
+
+// POST /api/push/test - Test push delivery
+app.post('/api/push/test', async (req, res) => {
+  try {
+    const { userId, isAdmin, title, body } = req.body;
+    const query = isAdmin ? { isAdmin: true } : (userId ? { userId } : {});
+    const subs = await SubscriptionModel.find(query);
+
+    const payload = {
+      title: title || 'ZUNA TAILORS Test Alert',
+      body: body || 'Web push notifications are functioning smoothly!',
+      icon: '/logo.jpg',
+      badge: '/logo.jpg',
+      data: { url: '/', test: true }
+    };
+
+    let sentCount = 0;
+    for (const sub of subs) {
+      const ok = await sendPush(sub, payload);
+      if (ok) sentCount++;
+    }
+
+    res.json({ success: true, matchedCount: subs.length, sentCount });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// AI Assistant Endpoint (Powered by Google Gemini & Rate Limited)
+// -------------------------------------------------------------
+app.post('/api/ai/chat', aiChatLimiter, async (req, res) => {
+  try {
+    const { message, history = [] } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({ success: false, message: 'Message is required' });
+    }
+
+    if (!GEMINI_API_KEY) {
+      return res.status(503).json({
+        success: false,
+        message: 'Gemini API key is not configured in server/.env'
+      });
+    }
+
+    const systemPrompt = `You are the official bespoke tailoring AI Assistant for ZUNA TAILORS, an elite menswear and bespoke tailoring atelier located in Howrah, West Bengal, India.
+Master Tailor: Sultan Baig, former Pantaloons showroom master with decades of master cutting and bespoke tailoring experience.
+Atelier Locations:
+- Studio & Fittings: 12, Bashiruddin Munshi Lane, Howrah
+- Tailoring Workshop: 31, Bashiruddin Munshi Lane, Howrah
+Contact Numbers: Primary Call: +91 8910763123, Workshop: +91 628942663
+Services:
+- Bespoke 2-Piece & 3-Piece Suits, Tuxedos, Blazers, Nehru Jackets, Sherwanis, Kurtas, Formal Shirts, Trousers, Alterations and Re-cuts.
+Measurement Options:
+1. Home Service Fitting: Master tailor visits the client with measuring tape and fabric swatches.
+2. Studio Fitting: Personal fitting at our Howrah atelier.
+3. Custom Measurements: Client inputs their measurements online during ordering.
+Orders:
+- Clients can place custom orders via the ORDER tab, track status live, and communicate directly with the workshop.
+
+Instructions for your answers:
+- Provide polite, helpful, concise, and knowledgeable guidance on tailoring, fits, fabric choices, style advice, and ordering.
+- If asked about custom specifications or documentation, refer to the documentation provided below:
+${ATELIER_DOCS && ATELIER_DOCS.trim() ? `\n--- ATELIER DOCUMENTATION ---\n${ATELIER_DOCS.trim()}\n--- END DOCUMENTATION ---\n` : ''}`;
+
+    // Build chat contents for Gemini API
+    const contents = [];
+
+    // History (last 6 messages for context)
+    const recent = Array.isArray(history) ? history.slice(-6) : [];
+    for (const msg of recent) {
+      if (msg.sender === 'user' && msg.text) {
+        contents.push({ role: 'user', parts: [{ text: msg.text }] });
+      } else if (msg.sender === 'ai' && msg.text) {
+        contents.push({ role: 'model', parts: [{ text: msg.text }] });
+      }
+    }
+
+    // Append current message with system context
+    contents.push({
+      role: 'user',
+      parts: [{ text: `${systemPrompt}\n\nClient Query: ${message.trim()}` }]
+    });
+
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`;
+
+    const geminiRes = await fetch(geminiUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents })
+    });
+
+    const data = await geminiRes.json();
+
+    if (!geminiRes.ok || data.error) {
+      console.error('Gemini API Error:', data.error);
+      return res.status(500).json({
+        success: false,
+        message: data.error?.message || 'Error communicating with Gemini service'
+      });
+    }
+
+    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Thank you for reaching out to ZUNA Tailors. How can Master Sultan Baig assist you with your garment?';
+
+    res.json({
+      success: true,
+      reply: reply.trim()
+    });
+  } catch (err) {
+    console.error('AI chat endpoint error:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process AI response: ' + err.message
+    });
   }
 });
 

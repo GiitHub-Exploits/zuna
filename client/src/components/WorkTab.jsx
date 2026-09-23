@@ -33,7 +33,7 @@ export default function WorkTab({ onStartOrderWithGarment }) {
     setError('');
     try {
       const url = selectedCategory === 'All' 
-        ? '/api/work' 
+        ? import.meta.env.VITE_API_URL + "/api/work" 
         : `/api/work?category=${encodeURIComponent(selectedCategory)}`;
       
       const res = await fetch(url);

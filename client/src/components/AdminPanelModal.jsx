@@ -61,7 +61,7 @@ export default function AdminPanelModal({ isOpen, onClose, onLogout, onWorkUpdat
   const fetchOrders = async () => {
     setLoadingOrders(true);
     try {
-      const res = await fetch('/api/orders');
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/orders");
       const data = await res.json();
       setOrders(data.orders || []);
     } catch (err) {
@@ -75,7 +75,7 @@ export default function AdminPanelModal({ isOpen, onClose, onLogout, onWorkUpdat
   const fetchWork = async () => {
     setLoadingWork(true);
     try {
-      const res = await fetch('/api/work');
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/work");
       const data = await res.json();
       setWorkItems(data.items || []);
     } catch (err) {
@@ -141,7 +141,7 @@ export default function AdminPanelModal({ isOpen, onClose, onLogout, onWorkUpdat
     setPublishMessage({ text: '', type: '' });
 
     try {
-      const res = await fetch('/api/work', {
+      const res = await fetch(import.meta.env.VITE_API_URL + "/api/work", {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newWork)
